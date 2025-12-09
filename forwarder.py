@@ -120,7 +120,13 @@ def _convert_prices(text: str) -> str:
             return match.group(0)
         return f"{uzs_str} UZS"
 
+    original_text = text
     text = re.sub(r"(?P<amount>\d[\d\s_.,]*)\s*\$", convert_trailing_dollar, text)
+
+    # Если мы что-то сконвертировали по доллару, считаем, что это приоритет,
+    # и НЕ трогаем остальные числа, чтобы избежать повторной конвертации.
+    if text != original_text:
+        return text
 
     # 3) Конвертируем большие числа с пробелами как разделителями разрядов
     #    например: "150 000", "1 200 000" (без символа $)
