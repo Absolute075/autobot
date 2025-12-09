@@ -82,7 +82,7 @@ else:
     USD_TO_UZS_RATE = None
 
 EXCHANGE_API_URL: str = os.getenv(
-    "EXCHANGERATE_HOST_URL", "https://api.exchangerate.host/latest"
+    "EXCHANGERATE_HOST_URL", "https://api.exchangerate.host/live"
 )
 EXCHANGE_API_KEY: str | None = os.getenv("EXCHANGERATE_HOST_KEY") or None
 
@@ -149,9 +149,11 @@ def _convert_prices(text: str) -> str:
 async def _update_usd_rate_once() -> None:
     global USD_TO_UZS_RATE
 
-    params: dict[str, str] = {"base": "USD", "symbols": "UZS"}
+    params: dict[str, str] = {}
     if EXCHANGE_API_KEY:
         params["access_key"] = EXCHANGE_API_KEY
+    # Ограничимся одной валютой, если поддерживается
+    params["currencies"] = "UZS"
 
     try:
         async with aiohttp.ClientSession() as session:
@@ -165,10 +167,10 @@ async def _update_usd_rate_once() -> None:
         return
 
     try:
-        rates = data.get("rates") or {}
-        uzs_rate_raw = rates.get("UZS")
+        quotes = data.get("quotes") or {}
+        uzs_rate_raw = quotes.get("USDUZS")
         if uzs_rate_raw is None:
-            raise KeyError("rates['UZS'] is missing")
+            raise KeyError("quotes['USDUZS'] is missing")
         uzs_rate = float(uzs_rate_raw)
     except Exception as e:
         print(f"[WARN] USD->UZS rate not found in response: {e}")
