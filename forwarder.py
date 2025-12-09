@@ -65,6 +65,10 @@ else:
 SESSION_NAME: str = os.getenv("SESSION_NAME", "user_session")
 
 
+FORWARD_ENABLED: bool = True
+PROCESSED_ALBUM_IDS: set[int] = set()
+
+
 # ==========================
 # ИНИЦИАЛИЗАЦИЯ КЛИЕНТА
 # ==========================
@@ -76,7 +80,12 @@ client = TelegramClient(SESSION_NAME, API_ID, API_HASH)
 # ОБРАБОТЧИК НОВЫХ СООБЩЕНИЙ
 # ==========================
 
-@client.on(events.NewMessage(chats=SOURCE_CHANNELS))
+@client.on(
+    events.NewMessage(
+        chats=SOURCE_CHANNELS,
+        func=lambda e: not getattr(e.message, "grouped_id", None),
+    )
+)
 async def forward_handler(event: events.NewMessage.Event) -> None:
     """Обработчик новых сообщений в указанных каналах.
 
@@ -91,6 +100,9 @@ async def forward_handler(event: events.NewMessage.Event) -> None:
         return
 
     if getattr(msg, "grouped_id", None):
+        return
+
+    if not FORWARD_ENABLED:
         return
 
     try:
@@ -124,6 +136,16 @@ async def album_handler(event: events.Album.Event) -> None:
     if not event.messages:
         return
 
+    if not FORWARD_ENABLED:
+        return
+
+    gid = getattr(event, "grouped_id", None)
+    if gid is not None:
+        global PROCESSED_ALBUM_IDS
+        if gid in PROCESSED_ALBUM_IDS:
+            return
+        PROCESSED_ALBUM_IDS.add(gid)
+
     files = []
     caption = ""
 
@@ -150,6 +172,38 @@ async def album_handler(event: events.Album.Event) -> None:
         print(f"Переслан альбом из {src}")
     except RPCError as e:
         print(f"[ERROR] Ошибка при отправке альбома: {e}")
+
+
+@client.on(events.NewMessage)
+async def control_handler(event: events.NewMessage.Event) -> None:
+    msg = event.message
+
+    if not event.is_private:
+        return
+
+    if not getattr(msg, "out", False):
+        return
+
+    text = (msg.message or "").strip().lower()
+
+    global FORWARD_ENABLED
+
+    if text in {"/stop", "stop", "стоп"}:
+        if not FORWARD_ENABLED:
+            return
+        FORWARD_ENABLED = False
+        try:
+            await event.reply("Forwarding stopped.")
+        except RPCError:
+            pass
+    elif text in {"/start", "start", "пуск"}:
+        if FORWARD_ENABLED:
+            return
+        FORWARD_ENABLED = True
+        try:
+            await event.reply("Forwarding started.")
+        except RPCError:
+            pass
 
 
 # ==========================
