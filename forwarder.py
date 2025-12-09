@@ -11,8 +11,12 @@
 
 from __future__ import annotations
 
+import asyncio
 import os
+import re
+from datetime import datetime, timedelta
 
+import aiohttp
 from dotenv import load_dotenv
 from telethon import TelegramClient, events
 from telethon.errors import RPCError
@@ -68,6 +72,111 @@ SESSION_NAME: str = os.getenv("SESSION_NAME", "user_session")
 FORWARD_ENABLED: bool = True
 PROCESSED_ALBUM_IDS: set[int] = set()
 
+_usd_to_uzs_rate_env = os.getenv("USD_TO_UZS_RATE")
+if _usd_to_uzs_rate_env:
+    try:
+        USD_TO_UZS_RATE: float | None = float(_usd_to_uzs_rate_env)
+    except ValueError:
+        USD_TO_UZS_RATE = None
+else:
+    USD_TO_UZS_RATE = None
+
+
+def _convert_prices(text: str) -> str:
+    if not text:
+        return text
+    if USD_TO_UZS_RATE is None:
+        return text
+
+    def _amount_to_uzs(amount_str: str) -> str | None:
+        raw = amount_str.replace(" ", "").replace("_", "")
+        if not raw:
+            return None
+        try:
+            amount = float(raw.replace(",", "."))
+        except ValueError:
+            return None
+
+        uzs = int(round(amount * USD_TO_UZS_RATE))
+        return f"{uzs:,}".replace(",", " ")
+
+    # 1) Нормализуем "$400" / "$ 400" в вид "400$"
+    def normalize_leading_dollar(match: re.Match[str]) -> str:
+        amount_str = match.group("amount")
+        return f"{amount_str}$"
+
+    text = re.sub(r"\$\s*(?P<amount>\d[\d\s_.,]*)", normalize_leading_dollar, text)
+
+    # 2) Конвертируем варианты "400$", "400 $", "150 000$", "150 000 $"
+    def convert_trailing_dollar(match: re.Match[str]) -> str:
+        amount_str = match.group("amount")
+        uzs_str = _amount_to_uzs(amount_str)
+        if uzs_str is None:
+            return match.group(0)
+        return f"{amount_str}$ ({uzs_str} UZS)"
+
+    text = re.sub(r"(?P<amount>\d[\d\s_.,]*)\s*\$", convert_trailing_dollar, text)
+
+    # 3) Конвертируем большие числа с пробелами как разделителями разрядов
+    #    например: "150 000", "1 200 000" (без символа $)
+    def convert_plain_grouped(match: re.Match[str]) -> str:
+        amount_str = match.group("amount")
+        uzs_str = _amount_to_uzs(amount_str)
+        if uzs_str is None:
+            return match.group(0)
+        return f"{amount_str} ({uzs_str} UZS)"
+
+    text = re.sub(
+        r"(?<![\w$])(?P<amount>\d{1,3}(?:[ _]\d{3})+)(?!\s*(?:UZS|usd|USD|\$|\())",
+        convert_plain_grouped,
+        text,
+    )
+
+    return text
+
+
+async def _update_usd_rate_once() -> None:
+    global USD_TO_UZS_RATE
+
+    url = "https://www.floatrates.com/daily/usd.json"
+
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, timeout=10) as resp:
+                if resp.status != 200:
+                    print(f"[WARN] Failed to fetch USD rate: HTTP {resp.status}")
+                    return
+                data = await resp.json()
+    except Exception as e:
+        print(f"[WARN] Failed to fetch USD rate: {e}")
+        return
+
+    try:
+        uzs_rate_raw = data["uzs"]["rate"]
+        uzs_rate = float(uzs_rate_raw)
+    except Exception as e:
+        print(f"[WARN] USD->UZS rate not found in response: {e}")
+        return
+
+    USD_TO_UZS_RATE = uzs_rate
+    print(f"USD_TO_UZS_RATE updated to {USD_TO_UZS_RATE}")
+
+
+async def _schedule_usd_rate_updates() -> None:
+    # Первое обновление сразу после старта
+    await _update_usd_rate_once()
+
+    while True:
+        now = datetime.now()
+        tomorrow = (now + timedelta(days=1)).date()
+        next_midnight = datetime.combine(tomorrow, datetime.min.time())
+        sleep_seconds = (next_midnight - now).total_seconds()
+        if sleep_seconds <= 0:
+            sleep_seconds = 24 * 60 * 60
+
+        await asyncio.sleep(sleep_seconds)
+        await _update_usd_rate_once()
+
 
 # ==========================
 # ИНИЦИАЛИЗАЦИЯ КЛИЕНТА
@@ -106,19 +215,21 @@ async def forward_handler(event: events.NewMessage.Event) -> None:
         return
 
     try:
+        text = _convert_prices(msg.message or "")
+
         # Если есть медиа (фото, видео, документ, голос и т.д.)
         if msg.media:
             await client.send_file(
                 TARGET_CHAT,
                 msg.media,
-                caption=msg.message or "",
+                caption=text,
                 link_preview=False,
             )
         # Если просто текст
         elif msg.message:
             await client.send_message(
                 TARGET_CHAT,
-                msg.message,
+                text,
                 link_preview=False,
             )
         # Нечего отправлять
@@ -159,6 +270,8 @@ async def album_handler(event: events.Album.Event) -> None:
 
     if not files:
         return
+
+    caption = _convert_prices(caption)
 
     try:
         await client.send_file(
@@ -216,6 +329,9 @@ def main() -> None:
 
     # client.start сам спросит номер/код при первом запуске
     client.start()
+
+    # Фоновое обновление курса USD->UZS (сразу и затем раз в сутки от полуночи)
+    client.loop.create_task(_schedule_usd_rate_updates())
 
     print("Клиент запущен. Ожидаю новые сообщения в каналах:")
     for ch in SOURCE_CHANNELS:
