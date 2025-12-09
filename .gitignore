@@ -1,0 +1,15 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+
+# Virtual env
+venv/
+.env
+
+# IDE
+.idea/
+.vscode/
+
+# Telethon session files
+*.session

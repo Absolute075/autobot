@@ -1,0 +1,139 @@
+#!/usr/bin/env python3
+"""Telegram userbot: пересылает сообщения из публичных каналов в один целевой канал/группу
+без пометки "Переслано от" (создаёт новые сообщения).
+
+Перед использованием:
+1. Получите api_id и api_hash на https://my.telegram.org/apps под аккаунтом, который будет userbot'ом.
+2. Заполните настройки в блоке CONFIG ниже.
+3. Установите зависимости: pip install telethon
+4. Первый запуск: python forwarder.py  (ввести номер телефона и код из Telegram).
+"""
+
+from __future__ import annotations
+
+import os
+
+from dotenv import load_dotenv
+from telethon import TelegramClient, events
+from telethon.errors import RPCError
+
+# ==========================
+# CONFIG
+# ==========================
+
+load_dotenv()
+
+# 1) Данные приложения Telegram
+_api_id_env = os.getenv("API_ID")
+_api_hash_env = os.getenv("API_HASH")
+
+if not _api_id_env or not _api_hash_env:
+    raise RuntimeError("API_ID and API_HASH must be set in .env")
+
+API_ID: int = int(_api_id_env)
+API_HASH: str = _api_hash_env
+
+# 2) Каналы-источники
+_source_channels_env = os.getenv("SOURCE_CHANNELS")
+
+if not _source_channels_env:
+    raise RuntimeError("SOURCE_CHANNELS must be set in .env")
+
+SOURCE_CHANNELS: list[str] = [
+    ch.strip()
+    for ch in _source_channels_env.split(",")
+    if ch.strip()
+]
+
+# 3) Целевой чат для пересылки
+# - Публичный канал: username БЕЗ @, например "my_target_channel" для @my_target_channel
+# - Публичная группа: аналогично
+# - Если нужно использовать приватный канал/группу без username, позже можно заменить
+#   на numeric ID (например, -1001234567890).
+_target_chat_env = os.getenv("TARGET_CHAT")
+
+if not _target_chat_env:
+    raise RuntimeError("TARGET_CHAT must be set in .env")
+
+TARGET_CHAT: str | int
+if _target_chat_env.lstrip("-").isdigit():
+    TARGET_CHAT = int(_target_chat_env)
+else:
+    TARGET_CHAT = _target_chat_env
+
+# 4) Имя файла сессии (создастся автоматически при первом запуске)
+SESSION_NAME: str = os.getenv("SESSION_NAME", "user_session")
+
+
+# ==========================
+# ИНИЦИАЛИЗАЦИЯ КЛИЕНТА
+# ==========================
+
+client = TelegramClient(SESSION_NAME, API_ID, API_HASH)
+
+
+# ==========================
+# ОБРАБОТЧИК НОВЫХ СООБЩЕНИЙ
+# ==========================
+
+@client.on(events.NewMessage(chats=SOURCE_CHANNELS))
+async def forward_handler(event: events.NewMessage.Event) -> None:
+    """Обработчик новых сообщений в указанных каналах.
+
+    Создаёт новое сообщение в TARGET_CHAT с тем же текстом/медиа,
+    поэтому надписи "Переслано от" не будет.
+    """
+
+    msg = event.message
+
+    # Игнорируем служебные сообщения (создание чата, закрепление и т.п.)
+    if getattr(msg, "action", None):
+        return
+
+    try:
+        # Если есть медиа (фото, видео, документ, голос и т.д.)
+        if msg.media:
+            await client.send_file(
+                TARGET_CHAT,
+                msg.media,
+                caption=msg.message or "",
+                link_preview=False,
+            )
+        # Если просто текст
+        elif msg.message:
+            await client.send_message(
+                TARGET_CHAT,
+                msg.message,
+                link_preview=False,
+            )
+        # Нечего отправлять
+        else:
+            return
+
+        src = event.chat.username or event.chat_id
+        print(f"Переслано сообщение из {src}")
+    except RPCError as e:
+        print(f"[ERROR] Ошибка при отправке сообщения: {e}")
+
+
+# ==========================
+# ТОЧКА ВХОДА
+# ==========================
+
+def main() -> None:
+    print("=== Telegram userbot forwarder ===")
+    print("При первом запуске потребуется ввести номер телефона и код из Telegram.")
+
+    # client.start сам спросит номер/код при первом запуске
+    client.start()
+
+    print("Клиент запущен. Ожидаю новые сообщения в каналах:")
+    for ch in SOURCE_CHANNELS:
+        print(f" - {ch}")
+    print(f"Целевой чат: {TARGET_CHAT}\n")
+
+    client.run_until_disconnected()
+
+
+if __name__ == "__main__":
+    main()
