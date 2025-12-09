@@ -113,7 +113,7 @@ def _convert_prices(text: str) -> str:
         uzs_str = _amount_to_uzs(amount_str)
         if uzs_str is None:
             return match.group(0)
-        return f"{amount_str}$ ({uzs_str} UZS)"
+        return f"{uzs_str} UZS"
 
     text = re.sub(r"(?P<amount>\d[\d\s_.,]*)\s*\$", convert_trailing_dollar, text)
 
@@ -124,7 +124,7 @@ def _convert_prices(text: str) -> str:
         uzs_str = _amount_to_uzs(amount_str)
         if uzs_str is None:
             return match.group(0)
-        return f"{amount_str} ({uzs_str} UZS)"
+        return f"{uzs_str} UZS"
 
     text = re.sub(
         r"(?<![\w$])(?P<amount>\d{1,3}(?:[ _]\d{3})+)(?!\s*(?:UZS|usd|USD|\$|\())",
