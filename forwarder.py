@@ -143,6 +143,20 @@ def _convert_prices(text: str) -> str:
         text,
     )
 
+    # 4) Конвертируем большие числа без разделителей, например: "100000"
+    def convert_plain_big(match: re.Match[str]) -> str:
+        amount_str = match.group("amount")
+        uzs_str = _amount_to_uzs(amount_str)
+        if uzs_str is None:
+            return match.group(0)
+        return f"{uzs_str} UZS"
+
+    text = re.sub(
+        r"(?<![\w$])(?P<amount>\d{5,})(?!\s*(?:UZS|usd|USD|\$|\())",
+        convert_plain_big,
+        text,
+    )
+
     return text
 
 
