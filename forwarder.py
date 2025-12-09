@@ -90,6 +90,9 @@ async def forward_handler(event: events.NewMessage.Event) -> None:
     if getattr(msg, "action", None):
         return
 
+    if getattr(msg, "grouped_id", None):
+        return
+
     try:
         # Если есть медиа (фото, видео, документ, голос и т.д.)
         if msg.media:
@@ -114,6 +117,39 @@ async def forward_handler(event: events.NewMessage.Event) -> None:
         print(f"Переслано сообщение из {src}")
     except RPCError as e:
         print(f"[ERROR] Ошибка при отправке сообщения: {e}")
+
+
+@client.on(events.Album(chats=SOURCE_CHANNELS))
+async def album_handler(event: events.Album.Event) -> None:
+    if not event.messages:
+        return
+
+    files = []
+    caption = ""
+
+    for m in event.messages:
+        if getattr(m, "action", None):
+            continue
+        if m.media:
+            files.append(m.media)
+        if not caption and (m.message or ""):
+            caption = m.message
+
+    if not files:
+        return
+
+    try:
+        await client.send_file(
+            TARGET_CHAT,
+            files,
+            caption=caption,
+            link_preview=False,
+        )
+
+        src = event.chat.username or event.chat_id
+        print(f"Переслан альбом из {src}")
+    except RPCError as e:
+        print(f"[ERROR] Ошибка при отправке альбома: {e}")
 
 
 # ==========================
