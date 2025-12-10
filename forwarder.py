@@ -131,8 +131,8 @@ def _convert_prices(text: str) -> str:
     if text != original_text:
         return text
 
-    # 3) Конвертируем большие числа с пробелами как разделителями разрядов
-    #    например: "150 000", "1 200 000" (без символа $)
+    # 3) Конвертируем большие числа с разделителями разрядов
+    #    например: "150 000", "1 200 000", "100.000", "100,000" (без символа $)
     def convert_plain_grouped(match: re.Match[str]) -> str:
         amount_str = match.group("amount")
         uzs_str = _amount_to_uzs(amount_str)
@@ -141,7 +141,7 @@ def _convert_prices(text: str) -> str:
         return f"{uzs_str} UZS"
 
     text = re.sub(
-        r"(?<![\\w$+])(?P<amount>\\d{1,3}(?:[ _.]\\d{3})+)(?!\\s*(?:UZS|usd|USD|\\$|\\()))",
+        r"(?<!\+)(?P<amount>\d{1,3}(?:[ _.,]\d{3})+)(?!\s*(?:UZS|usd|USD|\$|\()))",
         convert_plain_grouped,
         text,
     )
@@ -155,7 +155,7 @@ def _convert_prices(text: str) -> str:
         return f"{uzs_str} UZS"
 
     text = re.sub(
-        r"(?<![\\w$+])(?P<amount>\\d{5,})(?!\\s*(?:UZS|usd|USD|\\$|\\()))",
+        r"(?<!\+)(?P<amount>\d{5,})(?!\s*(?:UZS|usd|USD|\$|\()))",
         convert_plain_big,
         text,
     )
