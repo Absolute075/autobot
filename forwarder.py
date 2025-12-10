@@ -216,6 +216,8 @@ async def album_caption_edited_handler(event: events.MessageEdited.Event) -> Non
 
     PROCESSED_ALBUM_IDS.add(gid)
 
+    caption = msg.message or ""
+
     try:
         await client.send_file(
             TARGET_CHAT,
