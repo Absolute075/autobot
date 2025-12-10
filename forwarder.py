@@ -71,6 +71,7 @@ SESSION_NAME: str = os.getenv("SESSION_NAME", "user_session")
 
 FORWARD_ENABLED: bool = True
 PROCESSED_ALBUM_IDS: set[int] = set()
+PENDING_ALBUMS: dict[int, list] = {}
 
 _usd_to_uzs_rate_env = os.getenv("USD_TO_UZS_RATE")
 if _usd_to_uzs_rate_env:
@@ -97,11 +98,13 @@ def _convert_prices(text: str) -> str:
         raw = amount_str.replace(" ", "").replace("_", "")
         if not raw:
             return None
-        try:
-            amount = float(raw.replace(",", "."))
-        except ValueError:
+
+        # Удаляем возможные разделители тысяч ("100.000", "100,000")
+        digits_only = raw.replace(",", "").replace(".", "")
+        if not digits_only.isdigit():
             return None
 
+        amount = int(digits_only)
         uzs = int(round(amount * USD_TO_UZS_RATE))
         return f"{uzs:,}".replace(",", " ")
 
@@ -138,7 +141,7 @@ def _convert_prices(text: str) -> str:
         return f"{uzs_str} UZS"
 
     text = re.sub(
-        r"(?<![\w$])(?P<amount>\d{1,3}(?:[ _]\d{3})+)(?!\s*(?:UZS|usd|USD|\$|\())",
+        r"(?<![\\w$+])(?P<amount>\\d{1,3}(?:[ _.]\\d{3})+)(?!\\s*(?:UZS|usd|USD|\\$|\\()))",
         convert_plain_grouped,
         text,
     )
@@ -152,7 +155,7 @@ def _convert_prices(text: str) -> str:
         return f"{uzs_str} UZS"
 
     text = re.sub(
-        r"(?<![\w$])(?P<amount>\d{5,})(?!\s*(?:UZS|usd|USD|\$|\())",
+        r"(?<![\\w$+])(?P<amount>\\d{5,})(?!\\s*(?:UZS|usd|USD|\\$|\\()))",
         convert_plain_big,
         text,
     )
@@ -282,13 +285,6 @@ async def album_handler(event: events.Album.Event) -> None:
     if not FORWARD_ENABLED:
         return
 
-    gid = getattr(event, "grouped_id", None)
-    if gid is not None:
-        global PROCESSED_ALBUM_IDS
-        if gid in PROCESSED_ALBUM_IDS:
-            return
-        PROCESSED_ALBUM_IDS.add(gid)
-
     files = []
     caption = ""
 
@@ -302,6 +298,22 @@ async def album_handler(event: events.Album.Event) -> None:
 
     if not files:
         return
+
+    gid = getattr(event, "grouped_id", None)
+
+    # Если альбом без подписи, откладываем его до появления подписи
+    if gid is not None and not caption:
+        global PENDING_ALBUMS
+        PENDING_ALBUMS[gid] = files
+        src = event.chat.username or event.chat_id
+        print(f"Получен альбом без описания из {src}, ожидаю подпись")
+        return
+
+    if gid is not None:
+        global PROCESSED_ALBUM_IDS
+        if gid in PROCESSED_ALBUM_IDS:
+            return
+        PROCESSED_ALBUM_IDS.add(gid)
 
     caption = _convert_prices(caption)
 
@@ -317,6 +329,50 @@ async def album_handler(event: events.Album.Event) -> None:
         print(f"Переслан альбом из {src}")
     except RPCError as e:
         print(f"[ERROR] Ошибка при отправке альбома: {e}")
+
+
+@client.on(events.MessageEdited(chats=SOURCE_CHANNELS))
+async def album_caption_edited_handler(event: events.MessageEdited.Event) -> None:
+    if not FORWARD_ENABLED:
+        return
+
+    msg = event.message
+
+    if getattr(msg, "action", None):
+        return
+
+    gid = getattr(msg, "grouped_id", None)
+    if gid is None:
+        return
+
+    if not msg.message:
+        return
+
+    global PENDING_ALBUMS, PROCESSED_ALBUM_IDS
+
+    files = PENDING_ALBUMS.pop(gid, None)
+    if not files:
+        return
+
+    if gid in PROCESSED_ALBUM_IDS:
+        return
+
+    PROCESSED_ALBUM_IDS.add(gid)
+
+    caption = _convert_prices(msg.message or "")
+
+    try:
+        await client.send_file(
+            TARGET_CHAT,
+            files,
+            caption=caption,
+            link_preview=False,
+        )
+
+        src = event.chat.username or event.chat_id
+        print(f"Переслан альбом (по появлению подписи) из {src}")
+    except RPCError as e:
+        print(f"[ERROR] Ошибка при отправке альбома (edit): {e}")
 
 
 @client.on(events.NewMessage)
