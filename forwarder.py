@@ -157,7 +157,7 @@ def _convert_prices(text: str) -> str:
         return f"{uzs_str} UZS"
 
     text = re.sub(
-        r"(?<!\+)(?P<amount>\d{1,3}(?:[ _.,]\d{3})+)(?!\s*(?:UZS|usd|USD|\$))",
+        r"(?<!\+)(?P<amount>\d{1,3}(?:[ _.,]\d{3})+)(?!\s*(?:UZS|usd|USD|\$|сум|СУМ|sum|SUM|so'm|SO'M))",
         convert_plain_grouped,
         text,
     )
@@ -175,7 +175,7 @@ def _convert_prices(text: str) -> str:
         return f"{uzs_str} UZS"
 
     text = re.sub(
-        r"(?<!\+)(?P<amount>\d{5,})(?!\s*(?:UZS|usd|USD|\$))",
+        r"(?<!\+)(?P<amount>\d{5,})(?!\s*(?:UZS|usd|USD|\$|сум|СУМ|sum|SUM|so'm|SO'M))",
         convert_plain_big,
         text,
     )
