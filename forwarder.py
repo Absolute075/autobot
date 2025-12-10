@@ -16,7 +16,6 @@ import os
 import re
 from datetime import datetime, timedelta
 
-import aiohttp
 from dotenv import load_dotenv
 from telethon import TelegramClient, events
 from telethon.errors import RPCError
@@ -73,166 +72,6 @@ FORWARD_ENABLED: bool = True
 PROCESSED_ALBUM_IDS: set[int] = set()
 PENDING_ALBUMS: dict[int, list] = {}
 
-_usd_to_uzs_rate_env = os.getenv("USD_TO_UZS_RATE")
-if _usd_to_uzs_rate_env:
-    try:
-        USD_TO_UZS_RATE: float | None = float(_usd_to_uzs_rate_env)
-    except ValueError:
-        USD_TO_UZS_RATE = None
-else:
-    USD_TO_UZS_RATE = None
-
-EXCHANGE_API_URL: str = os.getenv(
-    "EXCHANGERATE_HOST_URL", "https://api.exchangerate.host/live"
-)
-EXCHANGE_API_KEY: str | None = os.getenv("EXCHANGERATE_HOST_KEY") or None
-
-
-def _convert_prices(text: str) -> str:
-    if not text:
-        return text
-    if USD_TO_UZS_RATE is None:
-        return text
-
-    def _amount_to_uzs(amount_str: str) -> str | None:
-        raw = amount_str.replace(" ", "").replace("_", "")
-        if not raw:
-            return None
-
-        # Удаляем возможные разделители тысяч ("100.000", "100,000")
-        digits_only = raw.replace(",", "").replace(".", "")
-        if not digits_only.isdigit():
-            return None
-
-        amount = int(digits_only)
-        uzs = int(round(amount * USD_TO_UZS_RATE))
-        return f"{uzs:,}".replace(",", " ")
-
-    # 1) Нормализуем "$400" / "$ 400" в вид "400$"
-    def normalize_leading_dollar(match: re.Match[str]) -> str:
-        amount_str = match.group("amount")
-        return f"{amount_str}$"
-
-    text = re.sub(r"\$\s*(?P<amount>\d[\d\s_.,]*)", normalize_leading_dollar, text)
-
-    # 2) Конвертируем варианты "400$", "400 $", "150 000$", "150 000 $"
-    def convert_trailing_dollar(match: re.Match[str]) -> str:
-        amount_str = match.group("amount")
-        uzs_str = _amount_to_uzs(amount_str)
-        if uzs_str is None:
-            return match.group(0)
-        return f"{uzs_str} UZS"
-
-    original_text = text
-    text = re.sub(r"(?P<amount>\d[\d\s_.,]*)\s*\$", convert_trailing_dollar, text)
-
-    # Если мы что-то сконвертировали по доллару, считаем, что это приоритет,
-    # и НЕ трогаем остальные числа, чтобы избежать повторной конвертации.
-    if text != original_text:
-        return text
-
-    def _has_plus_before(s: str, idx: int) -> bool:
-        """Проверяет, есть ли перед числом '+' в том же "куске" текста.
-
-        Пропускаем пробелы и цифры слева, чтобы числа внутри телефона
-        вида '+998...' или '+ 998...' не конвертировались.
-        """
-
-        i = idx - 1
-        while i >= 0 and (s[i].isspace() or s[i].isdigit()):
-            i -= 1
-        return i >= 0 and s[i] == "+"
-
-    # 3) Конвертируем большие числа с разделителями разрядов
-    #    например: "150 000", "1 200 000", "100.000", "100,000" (без символа $)
-    def convert_plain_grouped(match: re.Match[str]) -> str:
-        start = match.start()
-        if _has_plus_before(text, start):
-            return match.group(0)
-
-        amount_str = match.group("amount")
-        uzs_str = _amount_to_uzs(amount_str)
-        if uzs_str is None:
-            return match.group(0)
-        return f"{uzs_str} UZS"
-
-    text = re.sub(
-        r"(?<!\+)(?P<amount>\d{1,3}(?:[ _.,]\d{3})+)(?!\s*(?:UZS|usd|USD|\$|сум|СУМ|sum|SUM|so'm|SO'M))",
-        convert_plain_grouped,
-        text,
-    )
-
-    # 4) Конвертируем большие числа без разделителей, например: "100000"
-    def convert_plain_big(match: re.Match[str]) -> str:
-        start = match.start()
-        if _has_plus_before(text, start):
-            return match.group(0)
-
-        amount_str = match.group("amount")
-        uzs_str = _amount_to_uzs(amount_str)
-        if uzs_str is None:
-            return match.group(0)
-        return f"{uzs_str} UZS"
-
-    text = re.sub(
-        r"(?<!\+)(?P<amount>\d{5,})(?!\s*(?:UZS|usd|USD|\$|сум|СУМ|sum|SUM|so'm|SO'M))",
-        convert_plain_big,
-        text,
-    )
-
-    return text
-
-
-async def _update_usd_rate_once() -> None:
-    global USD_TO_UZS_RATE
-
-    params: dict[str, str] = {}
-    if EXCHANGE_API_KEY:
-        params["access_key"] = EXCHANGE_API_KEY
-    # Ограничимся одной валютой, если поддерживается
-    params["currencies"] = "UZS"
-
-    try:
-        async with aiohttp.ClientSession() as session:
-            async with session.get(EXCHANGE_API_URL, params=params, timeout=10) as resp:
-                if resp.status != 200:
-                    print(f"[WARN] Failed to fetch USD rate: HTTP {resp.status}")
-                    return
-                data = await resp.json()
-    except Exception as e:
-        print(f"[WARN] Failed to fetch USD rate: {e}")
-        return
-
-    try:
-        quotes = data.get("quotes") or {}
-        uzs_rate_raw = quotes.get("USDUZS")
-        if uzs_rate_raw is None:
-            raise KeyError("quotes['USDUZS'] is missing")
-        uzs_rate = float(uzs_rate_raw)
-    except Exception as e:
-        print(f"[WARN] USD->UZS rate not found in response: {e}")
-        return
-
-    USD_TO_UZS_RATE = uzs_rate
-    print(f"USD_TO_UZS_RATE updated to {USD_TO_UZS_RATE}")
-
-
-async def _schedule_usd_rate_updates() -> None:
-    # Первое обновление сразу после старта
-    await _update_usd_rate_once()
-
-    while True:
-        now = datetime.now()
-        tomorrow = (now + timedelta(days=1)).date()
-        next_midnight = datetime.combine(tomorrow, datetime.min.time())
-        sleep_seconds = (next_midnight - now).total_seconds()
-        if sleep_seconds <= 0:
-            sleep_seconds = 24 * 60 * 60
-
-        await asyncio.sleep(sleep_seconds)
-        await _update_usd_rate_once()
-
-
 # ==========================
 # ИНИЦИАЛИЗАЦИЯ КЛИЕНТА
 # ==========================
@@ -270,7 +109,7 @@ async def forward_handler(event: events.NewMessage.Event) -> None:
         return
 
     try:
-        text = _convert_prices(msg.message or "")
+        text = msg.message or ""
 
         # Если есть медиа (фото, видео, документ, голос и т.д.)
         if msg.media:
@@ -335,8 +174,6 @@ async def album_handler(event: events.Album.Event) -> None:
             return
         PROCESSED_ALBUM_IDS.add(gid)
 
-    caption = _convert_prices(caption)
-
     try:
         await client.send_file(
             TARGET_CHAT,
@@ -378,8 +215,6 @@ async def album_caption_edited_handler(event: events.MessageEdited.Event) -> Non
         return
 
     PROCESSED_ALBUM_IDS.add(gid)
-
-    caption = _convert_prices(msg.message or "")
 
     try:
         await client.send_file(
@@ -437,9 +272,6 @@ def main() -> None:
 
     # client.start сам спросит номер/код при первом запуске
     client.start()
-
-    # Фоновое обновление курса USD->UZS (сразу и затем раз в сутки от полуночи)
-    client.loop.create_task(_schedule_usd_rate_updates())
 
     print("Клиент запущен. Ожидаю новые сообщения в каналах:")
     for ch in SOURCE_CHANNELS:
