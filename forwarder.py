@@ -131,9 +131,19 @@ def _convert_prices(text: str) -> str:
     if text != original_text:
         return text
 
+    def _has_plus_before(s: str, idx: int) -> bool:
+        i = idx - 1
+        while i >= 0 and s[i].isspace():
+            i -= 1
+        return i >= 0 and s[i] == "+"
+
     # 3) Конвертируем большие числа с разделителями разрядов
     #    например: "150 000", "1 200 000", "100.000", "100,000" (без символа $)
     def convert_plain_grouped(match: re.Match[str]) -> str:
+        start = match.start()
+        if _has_plus_before(text, start):
+            return match.group(0)
+
         amount_str = match.group("amount")
         uzs_str = _amount_to_uzs(amount_str)
         if uzs_str is None:
@@ -148,6 +158,10 @@ def _convert_prices(text: str) -> str:
 
     # 4) Конвертируем большие числа без разделителей, например: "100000"
     def convert_plain_big(match: re.Match[str]) -> str:
+        start = match.start()
+        if _has_plus_before(text, start):
+            return match.group(0)
+
         amount_str = match.group("amount")
         uzs_str = _amount_to_uzs(amount_str)
         if uzs_str is None:
