@@ -132,8 +132,14 @@ def _convert_prices(text: str) -> str:
         return text
 
     def _has_plus_before(s: str, idx: int) -> bool:
+        """Проверяет, есть ли перед числом '+' в том же "куске" текста.
+
+        Пропускаем пробелы и цифры слева, чтобы числа внутри телефона
+        вида '+998...' или '+ 998...' не конвертировались.
+        """
+
         i = idx - 1
-        while i >= 0 and s[i].isspace():
+        while i >= 0 and (s[i].isspace() or s[i].isdigit()):
             i -= 1
         return i >= 0 and s[i] == "+"
 
