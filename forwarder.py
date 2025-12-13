@@ -269,19 +269,16 @@ async def control_handler(event: events.NewMessage.Event) -> None:
 # ==========================
 
 def main() -> None:
-    print("=== Telegram userbot forwarder ===")
-    print("При первом запуске потребуется ввести номер телефона и код из Telegram.")
+    print("=== Telegram userbot forwarder (systemd) ===")
+    print("Клиент запущен. Ожидаю новые сообщения:")
 
-    # client.start сам спросит номер/код при первом запуске
-    client.start()
-
-    print("Клиент запущен. Ожидаю новые сообщения в каналах:")
     for ch in SOURCE_CHANNELS:
         print(f" - {ch}")
-    print(f"Целевой чат: {TARGET_CHAT}\n")
+    print(f"Целевой чат: {TARGET_CHAT}")
 
     client.run_until_disconnected()
 
-
 if __name__ == "__main__":
-    main()
+    with client:
+        main()
+
